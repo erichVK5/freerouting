@@ -1,20 +1,27 @@
 package app.freerouting.gui;
 
+import app.freerouting.autoroute.BoardUpdateStrategy;
+import app.freerouting.autoroute.ItemSelectionStrategy;
 import app.freerouting.board.TestLevel;
 import app.freerouting.constants.Constants;
 import app.freerouting.interactive.InteractiveActionThread;
 import app.freerouting.interactive.ThreadActionListener;
 import app.freerouting.logger.FRLogger;
-import app.freerouting.autoroute.BoardUpdateStrategy;
-import app.freerouting.autoroute.ItemSelectionStrategy;
+import com.segment.analytics.Analytics;
+import com.segment.analytics.messages.IdentifyMessage;
+import com.segment.analytics.messages.TrackMessage;
 
-import javax.swing.UIManager;
-import javax.swing.UnsupportedLookAndFeelException;
+import javax.swing.*;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.HashMap;
 
 /**
  * Main application for creating frames with new or existing board designs.
@@ -43,13 +50,66 @@ public class MainApplication extends javax.swing.JFrame {
         FRLogger.info("Freerouting " + VERSION_NUMBER_STRING);
         FRLogger.debug(" version: " + Constants.FREEROUTING_VERSION + "," + Constants.FREEROUTING_BUILD_DATE);
         FRLogger.debug(" command line arguments: '" + String.join(" ", args) + "'");
-        FRLogger.debug(" architecture: " + System.getProperty("os.name") + "," + System.getProperty("os.arch") + "," + System.getProperty("os.version"));
+        FRLogger.debug(" operating system: " + System.getProperty("os.name") + "," + System.getProperty("os.arch") + "," + System.getProperty("os.version"));
         FRLogger.debug(" java: " + System.getProperty("java.version") + "," + System.getProperty("java.vendor"));
-        FRLogger.debug(" language: " + Locale.getDefault().getLanguage() + "," + Locale.getDefault());
+        FRLogger.debug(" locale: " + Locale.getDefault().getLanguage() + "," + Locale.getDefault());
         FRLogger.debug(" hardware: " + Runtime.getRuntime().availableProcessors() + " CPU cores," + (Runtime.getRuntime().maxMemory() / 1024 / 1024) + " MB RAM");
         FRLogger.debug(" UTC time: " + Instant.now().toString());
 
         Thread.setDefaultUncaughtExceptionHandler(new DefaultExceptionHandler());
+
+        // set up analytics
+        String analyticsUserId = java.util.UUID.randomUUID().toString();
+        Path analyticsUserIdFilename = Path.of(System.getProperty("java.io.tmpdir") + "freerouting_user_id.txt");
+        Path tempFile = null;
+
+        try {
+            // create a temporary file
+            tempFile = Files.createFile(analyticsUserIdFilename, null);
+
+            // read a temp file, Java 11
+            analyticsUserId = Files.readString(tempFile);
+        }
+        catch (IOException e) {
+            FRLogger.info("Couldn't read from temporary file.");
+        }
+
+        if (tempFile != null)
+        {
+            try
+            {
+                // write a line
+                Files.write(tempFile, analyticsUserId.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                FRLogger.warn("Couldn't write to temporary file.");
+            }
+        }
+
+        String segmentWriteKey = System.getenv("SEGMENT_WRITE_KEY");
+        Analytics analytics = Analytics.builder(segmentWriteKey).build();
+
+        var traits = new HashMap<String, String>();
+        traits.put("user.id", analyticsUserId);
+        traits.put("freerouting.version", Constants.FREEROUTING_VERSION);
+        traits.put("freerouting.build", Constants.FREEROUTING_BUILD_DATE);
+        traits.put("command_line", String.join(" ", args));
+        traits.put("os.name", System.getProperty("os.name"));
+        traits.put("os.architecture", System.getProperty("os.arch"));
+        traits.put("os.version", System.getProperty("os.version"));
+        traits.put("java.version", System.getProperty("java.version"));
+        traits.put("java.vendor", System.getProperty("java.vendor"));
+        traits.put("locale.language", Locale.getDefault().getLanguage());
+        traits.put("locale.region", Locale.getDefault().toString());
+        traits.put("hardware.cpu_cores", String.valueOf(Runtime.getRuntime().availableProcessors()));
+        traits.put("hardware.memory", String.valueOf(Runtime.getRuntime().maxMemory() / 1024 / 1024));
+        traits.put("time_utc", Instant.now().toString());
+
+        analytics.enqueue(IdentifyMessage.builder()
+                .userId(analyticsUserId)
+                .traits(traits)
+        );
+
+        // process startup options
         StartupOptions startupOptions = StartupOptions.parse(args);
 
         java.util.ResourceBundle resources = java.util.ResourceBundle.getBundle("app.freerouting.gui.MainApplication", startupOptions.current_locale);
